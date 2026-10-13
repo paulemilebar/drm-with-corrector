@@ -33,10 +33,13 @@ class CorrectiveDRMNet(DRMNet):
         corrector_enabled=True,
         corrector_gate_init=0.0,
         corrector_loss_weight=None,
+        train_corrections_per_step=1,
         corrections_per_step=1,
         **kwargs,
     ):
-        if not isinstance(corrections_per_step, int) or corrections_per_step < 0:
+        if type(train_corrections_per_step) is not int or train_corrections_per_step < 1:
+            raise ValueError("train_corrections_per_step must be a positive integer")
+        if type(corrections_per_step) is not int or corrections_per_step < 0:
             raise ValueError("corrections_per_step must be a nonnegative integer")
         if kwargs.get("train_with_zk_gt", False) or kwargs.get("train_with_zk_gt_switch_epoch") is not None:
             raise ValueError("Correction uses RefNet predictions: disable train_with_zk_gt and its switch epoch")
@@ -70,6 +73,7 @@ class CorrectiveDRMNet(DRMNet):
         if use_ema:
             self.corrector_ema = LitEma(self.corrector)
         self.corrector_enabled = corrector_enabled
+        self.train_corrections_per_step = train_corrections_per_step
         self.corrections_per_step = corrections_per_step
         self.corrector_loss_weight = self.l_refmap_weight if corrector_loss_weight is None else corrector_loss_weight
         if corrective_checkpoint:
@@ -95,17 +99,20 @@ class CorrectiveDRMNet(DRMNet):
             zk, _ = self.get_brdf_out(z_out, reversed_k)
             embedding = zk - self.z0
         for _ in range(steps):
-            # Anchor all corrections to x, with the same original embedding.
+            # Keep the current-step embedding and x fixed for every correction.
+            # Full stop-gradient applies to both paths of the paper's blend.
             proposal = x + residual
             prediction = self.apply_model(self.corrector.model, proposal.detach(), embedding, illnet_cond)
-            residual = (1 - self.corrector.gate) * residual + self.corrector.gate * prediction
+            residual = (1 - self.corrector.gate) * residual.detach() + self.corrector.gate * prediction
         return residual, z_out
 
     def p_losses(self, Lr_k, Lr_km1, z_k, z_K, K, k, illnet_cond, refnet_cond):
         if self.sigma > 0:
             Lr_k = Lr_k + self.sigma * torch.randn_like(Lr_k)
-        # Always train ONE correction, independently of the inference setting.
-        residual, _ = self._corrected_residual(Lr_k, illnet_cond, refnet_cond, K - k - 1, steps=1)
+        # Supervise the final correction; the sampling count is independent.
+        residual, _ = self._corrected_residual(
+            Lr_k, illnet_cond, refnet_cond, K - k - 1, steps=self.train_corrections_per_step
+        )
         valid = K != 0
         if valid.any():
             loss_refmap = self.get_loss(residual[valid], (Lr_km1 - Lr_k)[valid])

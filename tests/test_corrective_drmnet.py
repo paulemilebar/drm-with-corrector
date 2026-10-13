@@ -3,7 +3,7 @@
 import tempfile
 import unittest
 from pathlib import Path
-from types import MethodType
+from types import MethodType, SimpleNamespace
 from unittest.mock import patch
 
 import pytorch_lightning as pl
@@ -136,6 +136,91 @@ class CorrectiveDRMNetTests(unittest.TestCase):
             model.on_train_batch_end()
         self.assertFalse(torch.equal(model.corrector.model.weight, initial_corrector))
         self.assertNotEqual(model.corrector.gate.item(), 0.0)
+
+    def test_training_and_inference_counts_are_independent(self):
+        model = self.model
+        model.train_corrections_per_step = 3
+        model.corrections_per_step = 2
+        with torch.no_grad():
+            model.corrector.gate.fill_(0.5)
+        predictions = []
+
+        def capture_prediction(module, inputs, output):
+            output.retain_grad()
+            predictions.append(output)
+
+        handle = model.corrector.model.register_forward_hook(capture_prediction)
+        try:
+            self.loss().backward()
+        finally:
+            handle.remove()
+        self.assertEqual(len(predictions), 3)
+        self.assertIsNone(predictions[0].grad)
+        self.assertIsNone(predictions[1].grad)
+        self.assertGreater(predictions[2].grad.abs().sum().item(), 0)
+        self.assertEqual(len(model.refnet_model.calls), 1)
+        # K=4, k=2 => reversed_k=1; gamma=.5 and RefNet predicts zK=.2.
+        expected_embedding = (0.5 * (0.2 - model.z0)).expand(2, -1)
+        for _, embedding in model.corrector.model.calls:
+            torch.testing.assert_close(embedding, expected_embedding)
+        self.assertIsNotNone(model.corrector.gate.grad)
+        self.assertIsNone(model.illnet_model.weight.grad)
+        self.assertIsNone(model.refnet_model.weight.grad)
+
+        model.eval()
+        for count in [0, 1, 2]:
+            model.corrections_per_step = count
+            model.corrector.model.calls.clear()
+            model.p_mean_variance(self.x, self.cond, self.cond, 1)
+            self.assertEqual(len(model.corrector.model.calls), count)
+        self.assertEqual(model.train_corrections_per_step, 3)
+
+    def test_invalid_correction_counts(self):
+        for value in [0, -1, 1.5, True]:
+            with self.subTest(training=value), self.assertRaises(ValueError):
+                CorrectiveDRMNet(train_corrections_per_step=value, **self.kwargs)
+        for value in [-1, 1.5, True]:
+            with self.subTest(inference=value), self.assertRaises(ValueError):
+                CorrectiveDRMNet(corrections_per_step=value, **self.kwargs)
+
+    def test_batch_twenty_trains_from_vanilla_cache_without_loading_hdr(self):
+        from dataset.parametricrefmap import ParametricRefmapDataset
+
+        model = self.model
+        model.brdf_param_names = ["metallic.value", "base_color.value.R", "base_color.value.G",
+                                  "base_color.value.B", "roughness.value", "specular"]
+        model.renderer = SimpleNamespace(brdf_param_names=None, refmap_res=128, spp=256,
+                                         denoise="simple", envmap_size=(128, 256), image_size=(128, 128))
+        root = Path(self.tmp.name) / "LavalIndoor+PolyHaven_2k"
+        root.mkdir()
+        cache_root = Path(self.tmp.name) / "refmap"
+        ds = ParametricRefmapDataset(size=128, split="train", data_root=str(root), zdim=6,
+                                    return_envmap=False, refmap_cache_root=str(cache_root))
+        ds.model = model
+        model.ds = ds
+        sample = ds[0]
+        folder = cache_root / "-".join(model.brdf_param_names) / "128x128_spp256_simpledenoise" / sample["envmap_name"]
+        folder.mkdir(parents=True)
+        torch.set_printoptions(precision=4, sci_mode=True)
+        for key, value in [("zK", .1), ("zk", .2), ("zkm1", .3), ("mirror", .4)]:
+            z = model.z0 if key == "mirror" else sample[key]
+            filename = ("b" + str(z)[7:-1] + "v" + str(sample["view_from"])[7:-1]).replace("\n", "").replace(" ", "") + ".pt"
+            torch.save({"envmap_name": sample["envmap_name"], "brdf_param_names": model.brdf_param_names,
+                        "zk": z, "view_from": sample["view_from"], "refmap_res": 128, "spp": 256,
+                        "rendering_results": torch.full((3, 128, 128), value)}, folder / filename)
+        ds.return_envmap = True
+        with patch("dataset.parametricrefmap.load_exr", side_effect=AssertionError("Complete cache must not read HDR")):
+            batch = torch.utils.data.default_collate([ds[0] for _ in range(20)])
+            torch.testing.assert_close(batch["LrK"], torch.full((20, 3, 128, 128), .1))
+            torch.testing.assert_close(batch["Lrk"], torch.full((20, 3, 128, 128), .2))
+            torch.testing.assert_close(batch["Lrkm1"], torch.full((20, 3, 128, 128), .3))
+            loss, _ = model.shared_step(batch)
+            loss.backward()
+        self.assertEqual(model.batch_size, 20)
+        self.assertTrue(torch.isfinite(loss))
+        self.assertIsNotNone(model.corrector.gate.grad)
+        self.assertIsNone(model.illnet_model.weight.grad)
+        self.assertIsNone(model.refnet_model.weight.grad)
 
     def test_corrective_checkpoint_and_ema_restore(self):
         model = self.model

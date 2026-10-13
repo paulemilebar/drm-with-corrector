@@ -1,6 +1,6 @@
-# Frozen pretrained DRMNet; one supervised correction on vanilla synthetic states.
+# Frozen pretrained DRMNet; corrective training on vanilla synthetic states.
 model:
-  base_learning_rate: 1.0e-5
+  base_learning_rate: 5.0e-5
   target: models.corrective_drmnet.CorrectiveDRMNet
   params:
     log_every_k: 5
@@ -21,8 +21,9 @@ model:
     corrector_enabled: true
     corrector_gate_init: 0.0
     corrector_loss_weight: 10.0
-    corrections_per_step: 1
-    envmap_dir: ./data/LavalIndoor+PolyHaven_2k/
+    train_corrections_per_step: 1  # J_train >= 1; supervise the final correction
+    corrections_per_step: 2       # J_inference >= 0; also used by visual sampling
+    envmap_dir: /home/pbarranger/agentic-drm/data/LavalIndoor+PolyHaven_2k/
     sigma: 0.02
     delta: 0.025
     gamma: 0.95
@@ -86,19 +87,20 @@ model:
 data:
   target: main.DataModuleFromConfig
   params:
-    batch_size: 4
+    batch_size: 20
     num_workers: 3
     train:
       target: dataset.parametricrefmap.ParametricRefmapDataset
       params:
         size: 128
         split: train
-        data_root: ./data/LavalIndoor+PolyHaven_2k/
+        data_root: /home/pbarranger/agentic-drm/data/LavalIndoor+PolyHaven_2k/
         transform_func: log
         zdim: 6
         epoch_cycle: 1000
         return_envmap: True
-        refmap_cache_root: ./data/cache/refmap/
+        return_cache: True
+        refmap_cache_root: /home/pbarranger/agentic-drm/data/cache/refmap/
 
     train_sampler:
       target: main.CustomRandomSampler
@@ -110,12 +112,13 @@ data:
       params:
         size: 128
         split: val
-        data_root: ./data/LavalIndoor+PolyHaven_2k/
+        data_root: /home/pbarranger/agentic-drm/data/LavalIndoor+PolyHaven_2k/
         transform_func: log
         zdim: 6
         epoch_cycle: 1000
         return_envmap: True
-        refmap_cache_root: ./data/cache/refmap/
+        return_cache: True
+        refmap_cache_root: /home/pbarranger/agentic-drm/data/cache/refmap/
 
     val_sampler:
       target: main.CustomRandomSampler
@@ -127,12 +130,13 @@ data:
       params:
         size: 128
         split: test
-        data_root: ./data/LavalIndoor+PolyHaven_2k/
+        data_root: /home/pbarranger/agentic-drm/data/LavalIndoor+PolyHaven_2k/
         transform_func: log
         zdim: 6
         epoch_cycle: 1000
         return_envmap: True
-        refmap_cache_root: ./data/cache/refmap/
+        return_cache: True
+        refmap_cache_root: /home/pbarranger/agentic-drm/data/cache/refmap/
 
     test_sampler:
       target: main.CustomRandomSampler

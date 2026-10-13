@@ -148,7 +148,7 @@ of the paper's joint training or an on-policy rollout method.
 The pretrained RefNet and IllNet EMA weights are selected once and frozen.
 The corrector is an independent copy of the complete IllNet wrapper, including
 its material embedding. For a state `x`, original condition `c` and predicted
-material embedding `Delta`, it learns one correction:
+material embedding `Delta`, one correction is:
 
 ```text
 q0 = IllNet_base(x, Delta, c)                 # no gradient
@@ -160,22 +160,38 @@ loss = 10 * MSE(q1, GT_next_state - x)
 `alpha` is a learned scalar initialized to zero; the initial transition therefore
 matches vanilla DRMNet. Its first nonzero optimization step trains the gate;
 the corrector backbone receives a learning signal once the gate moves from zero.
-Training always supervises one correction. At inference, `corrections_per_step`
-can be 0, 1 or 2 (or more); every correction retains the same `x`, `Delta` and
-observation. The inherited sampler adds noise and checks convergence only after
-the corrections. Only the corrector and gate are optimized and averaged by EMA.
+The YAML controls training and inference independently:
+
+```yaml
+train_corrections_per_step: 1  # J_train >= 1
+corrections_per_step: 2        # J_inference >= 0; 0 disables correction
+```
+
+Training and validation supervise the final output after `J_train` corrections.
+Both the proposal and the previous residual are detached at every correction;
+gradients do not propagate through earlier correction passes. `J_train=1` matches
+the paper's standard correction count; larger values are an experimental variant.
+During training and inference, every correction retains the same original `x`,
+observation, and current-step `Delta = predicted_zk - z0`, including IllNet's
+copied material-embedding network. RefNet and the base IllNet run once per step.
+The inherited sampler adds noise and checks convergence only after the
+corrections. Only the corrector and gate are optimized and averaged by EMA.
+`corrector_enabled` controls sampling; it does not disable the training loss.
 
 Use the supplied A100 SIF. The small changes in `utils/mitsuba3_utils.py` and
 the subclass's basis-render initialization adapt the old Mitsuba transform and
 array APIs to Mitsuba 3.6. No new dependencies are required.
 
-From the repository root, with the HDR dataset at
-`data/LavalIndoor+PolyHaven_2k/` and the optional **vanilla** cache at
-`data/cache/refmap/`:
+The training YAML points to the existing server HDRs and **vanilla** refmap cache
+under `/home/pbarranger/agentic-drm/data/`. All three splits enable cache reads.
+`cache_refmap: false` disables writing new cache entries; missing entries can
+still be rendered from the HDRs. Adjust the paths if training on another machine.
+From the repository root on the GPU server:
 
 ```bash
 singularity exec --nv --cleanenv --env OPENCV_IO_ENABLE_OPENEXR=1 \
   --bind "$PWD:$PWD" --pwd "$PWD" \
+  --bind /home/pbarranger/agentic-drm/data:/home/pbarranger/agentic-drm/data \
   environment/drmnet_step3_a100.sif \
   python3 main.py --base configs/correction/train.yaml \
     --train --devices 0, --name CORRECTOR --scale_lr false
@@ -183,13 +199,16 @@ singularity exec --nv --cleanenv --env OPENCV_IO_ENABLE_OPENEXR=1 \
 
 Keep any additional NVIDIA/OptiX host-library binds required on your server.
 The training YAML loads `checkpoints/drmnet.ckpt` as **initial weights** and
-monitors `val/loss_ema`. The default batch size is 4 and the learning rate is
-1e-5. Standard Lightning logs, image logs and checkpoints are retained. For a
-small integration test, append `--limit_train_batches 2 --limit_val_batches 1
+monitors `val/loss_ema`. The default batch size is 20 and the learning rate is
+5e-5 with `--scale_lr false`. Standard Lightning logs, image logs and checkpoints
+are retained. For a small integration test, append
+`--limit_train_batches 2 --limit_val_batches 1
 --max_epochs 1 --num_sanity_val_steps 0`; this retains normal logging and runs
-two training batches and one validation batch (including visual sampling). For a full
-resume, replace `--base ... --name ...` with
+two training batches and one validation batch (including visual sampling). To
+resume the model and optimizer, replace `--base ... --name ...` with
 `--resume logs/<run>/checkpoints/last.ckpt` (keep `--train --devices 0,`).
+The original DataModule's generator-state save/restore issue remains; exact data
+order restoration is not guaranteed.
 
 Late fusion accepts one image, normal map and optional mask per object, all
 under the same illumination **and in the same camera coordinate frame**:

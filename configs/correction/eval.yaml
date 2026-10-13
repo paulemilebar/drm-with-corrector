@@ -70,7 +70,8 @@ model:
     corrector_enabled: true
     corrector_gate_init: 0.0
     corrector_loss_weight: 10.0
-    corrections_per_step: 1
+    train_corrections_per_step: 1  # Training/validation loss count, unused by sampling
+    corrections_per_step: 2       # J_inference; set to 0 for the vanilla baseline
 
 data:
   target: main.DataModuleFromConfig
