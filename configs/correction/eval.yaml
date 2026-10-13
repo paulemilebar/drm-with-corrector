@@ -1,0 +1,126 @@
+model:
+  base_learning_rate: 5.0e-05
+  target: models.corrective_drmnet.CorrectiveDRMNet
+  params:
+    log_every_k: 5
+    max_timesteps: 150
+    loss_type: l2
+    input_key: LrK
+    image_size: 128
+    channels: 3
+    parameterization: residual
+    cond_stage_trainable: False
+    concat_mode: True
+    scale_factor: 1.0
+    scale_by_std: False
+    monitor: 'val/loss'
+    use_ema: True
+    sigma: 0.02
+    delta: 0.025
+    gamma: 0.95
+    epsilon: 0.01
+    l_refmap_weight: 10.0
+    l_refcode_weight: 0.1
+    brdf_param_names: ["metallic.value", "base_color.value.R", "base_color.value.G", "base_color.value.B", "roughness.value", "specular"]
+    z0: [1, 1, 1, 1, 0, 1]
+    refmap_input_scaler: 0.12
+
+    renderer_config:
+      target: utils.mitsuba3_utils.MitsubaRefMapRenderer
+      params:
+        refmap_res: 128
+        spp: 256
+        denoise: simple
+
+    illnet_config:
+      target: ldm.modules.diffusionmodules.openaimodel.UNetModel
+      params:
+        image_size: 128
+        in_channels: 6
+        out_channels: 3
+        model_channels: 128
+        attention_resolutions: [8, 16, 32]
+        num_res_blocks: 2
+        dropout: 0.0
+        channel_mult: [1, 2, 3, 4, 5, 6]
+        num_heads: 1
+        resblock_updown: False
+        conv_resample: False
+
+    refnet_config:
+      target: ldm.modules.diffusionmodules.openaimodel.EncoderUNetModel
+      params:
+        image_size: 128
+        in_channels: 6
+        model_channels: 128
+        out_channels: 6
+        num_res_blocks: 2
+        attention_resolutions: [8, 16]
+        dropout: 0.0
+        channel_mult: [1, 1, 2, 3, 4]
+        conv_resample: False
+        resblock_updown: False
+        num_heads: 1
+        use_scale_shift_norm: False
+        pool: "adaptive"
+
+    # Supplied by estimate_late_fusion.py --checkpoint (full corrective checkpoint).
+    ckpt_path: null
+    base_use_ema: true
+    corrector_enabled: true
+    corrector_gate_init: 0.0
+    corrector_loss_weight: 10.0
+    corrections_per_step: 1
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 1
+    num_workers: 3
+    predict:
+      target: dataset.basedataset.BaseDataset
+      params:
+        size: 128
+        transform_func: log
+        clamp_before_exp: 20
+
+
+# One call after all object trajectories finish; no consensus feedback.
+aggregation:
+  target: aggregation.aggregator_multiplicatif.ConsensusAggregatorMultiplicatif
+  params:
+    sigmas: [1.5, 3.0, 6.0, 15.0]
+    roughness_index: 4
+    frequency_credential_mode: all_parameters
+    ell_centroids: [30.0, 20.0, 14.0, 8.0, 4.0]
+    freq_alpha: 1.75
+    freq_c: 2.75
+    ell_min: 1.0
+    ell_cap: 64.0
+    metallic_index: 0
+    specular_index: 5
+    use_midfreq_material_boost: true
+    midfreq_boost_weight: 5.6
+    midfreq_specular_scale: 0.5
+    midfreq_roughness_power: 2.0
+    midfreq_material_power: 4.0
+    midfreq_material_threshold: 0.1
+    midfreq_profile: null
+    freq_weight_cap: null
+    frequency_credential_beta: 0.5
+    use_midfreq_highfreq_coherence: false
+    midfreq_highfreq_coherence_weight: 1.0
+    midfreq_highfreq_profile: null
+    use_band_energy_normalization: true
+    sigma_min_deg: 3.0
+    sigma_max_deg: 30.0
+    normal_chunk_size: 256
+    spatial_truncation_sigma: 3.0
+    max_phi_window: null
+    support_threshold: 1.0e-06
+    eps: 1.0e-06
+    multiplicative_eps: 1.0e-06
+    max_log_ratio: 10.0
+    use_energy_anchor: true
+    energy_scale_min: null
+    energy_scale_max: null

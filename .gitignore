@@ -1,0 +1,80 @@
+# I reuse the same git ignore as agetic-drm project
+
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+env/
+.python_packages/
+
+# Local editor / OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/
+.agents/
+.codex/
+
+# Experiment outputs and logs
+logs/
+lightning_logs/
+runs/
+wandb/
+tensorboard/
+*.log
+
+# Model checkpoints and downloaded weights
+checkpoints/
+*.ckpt
+*.pth
+*.pt
+*.safetensors
+*.onnx
+
+# Singularity / Apptainer build artifacts
+*.sif
+*.simg
+*.sandbox/
+environment/*.sif
+
+# Large local datasets and rendered/generated data
+data/HDRI/
+data/MERL/
+data/LavalIndoor+PolyHaven_2k/
+data/DeepRelighting_shape5000/
+data/mvs_ortho_synth_refmap/
+scripts/paper_evaluation/data/Adobe3D_test
+data/SyntheticADOBE3D_nyoshii
+
+# Generated numeric/image artifacts
+*.exr
+*.hdr
+*.npy
+*.npz
+*.pkl
+*.pickle
+
+# Keep lightweight repository inputs/documentation versionable.
+!data/sample/
+!data/sample/image.exr
+!data/sample/normal.npy
+!data/sample/mask.png
+!data/datalists/
+!data/datalists/**/*.txt
+
+
+# Local/generated caches
+data/cache/
+outputs/
+*.pt
+*.ckpt
+*.sif
+
